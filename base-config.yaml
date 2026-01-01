@@ -5,7 +5,7 @@
 # This is parsed with dateparser, so Continent/City, UTC offsets, and abbreviations should work.
 #  e.g. Europe/Helsinki, EET, +0300
 # See https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
-default_timezone: America/Los_Angeles
+default_timezone: Europe/London
 
 # Default locale/language compatible with dateparser
 # See https://dateparser.readthedocs.io/en/latest/supported_locales.html
@@ -16,6 +16,7 @@ default_locale: en
 base_command:
 - remind
 - remindme
+- r
 
 # Agenda items are like reminders but don't have a time, for things like to-do lists.
 # Aliases used to create an agenda items by calling "!agenda <message>":
@@ -27,6 +28,7 @@ agenda_command:
 cancel_command:
 - cancel
 - delete
+- c
 
 # If verbose is true, display full confirmation messages. If false, confirm by reacting with :thumbs-up:
 verbose: true
@@ -43,3 +45,5 @@ admin_power_level: 50
 #   "%Y-%m-%d %H:%M %Z"             - 2023-09-17 19:36 PDT
 #   Currently, reminders within 7 days will be displayed as just the relative delta, e.g. "2 days and 1 hour"
 time_format: "%-I:%M%P %Z on %A, %B %-d %Y"
+
+management_room: '!roomid'
