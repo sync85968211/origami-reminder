@@ -142,6 +142,14 @@ class Reminder(object):
                 body += f"\n\n*You've reached the rate limit " \
                         f"({self.bot.config['rate_limit']} per {self.bot.config['rate_limit_minutes']} minutes). " \
                         f"Any upcoming reminders might be ignored!*"
+                        
+                if self.bot.config.get("management_room", None):
+                    user_pill = await make_pill(user_id=self.creator, client=self.bot.client)
+                    room_code = f"<code>{self.room_id}</code>"
+                    html = f"Rate limit exceeded by {user_pill} in room {room_code}"
+                    plain = f"Rate limit exceeded by {self.creator} in room {self.room_id}"
+                    content = TextMessageEventContent(msgtype=MessageType.NOTICE, body=plain, format=Format.HTML, formatted_body=html)
+                    await self.bot.client.send_message(RoomID(self.bot.config["management_room"]), content)
 
             # Create the message, and include all the data necessary to reschedule the reminder in org.bytemarx.reminder
             content = TextMessageEventContent(
