@@ -45,6 +45,7 @@ class Config(BaseProxyConfig):
         helper.copy("verbose")
         helper.copy("admin_power_level")
         helper.copy("time_format")
+        helper.copy("management_room")
 
 
 class ReminderBot(Plugin):
@@ -206,7 +207,7 @@ class ReminderBot(Plugin):
 
     async def confirm_reminder(self, evt: MessageEvent, reminder: Reminder, again: bool = False, agenda: bool = False):
         """Sends a message to the room confirming the reminder is set
-        If verbose is set in the config, print out the full message. If false, just react with 👍
+        If verbose is set in the config, print out the full message. If false, just react with ✅️
 
         Args:
             evt:
@@ -214,7 +215,7 @@ class ReminderBot(Plugin):
             again: Is this a reminder that was rescheduled?
             agenda: Is this an agenda instead of a reminder?
         """
-        confirmation_event = await evt.react("\U0001F44D")
+        confirmation_event = await evt.react("\U00002705\U0000FE0F")
 
         if self.config["verbose"]:
 
@@ -237,7 +238,7 @@ class ReminderBot(Plugin):
 
 
             confirmation_event = await evt.reply(f"{msg}\n\n"
-                            f"(others can \U0001F44D the message above to get pinged too)")
+                            f"(others can \U00002705\U0000FE0F the message above to get pinged too)")
 
         await reminder.set_confirmation(confirmation_event)
 
@@ -280,7 +281,7 @@ class ReminderBot(Plugin):
 
         if reminder.creator == evt.sender or user_power >= self.config["admin_power_level"]:
             await reminder.cancel()
-            await evt.reply("Reminder cancelled!") if self.config["verbose"] else await evt.react("👍")
+            await evt.reply("Reminder cancelled!") if self.config["verbose"] else await evt.react("✅️")
         else:
             await evt.reply(f"Power levels of {self.config['admin_power_level']} are required to cancel other people's reminders")
 
@@ -384,12 +385,12 @@ class ReminderBot(Plugin):
                             f"[Available timezones](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)")
 
 
-    @command.passive(regex=r"(?:\U0001F44D[\U0001F3FB-\U0001F3FF]?)",
+    @command.passive(regex=r"(?:\U00002705\U0000FE0F[\U0001F3FB-\U0001F3FF]?)",
                      field=lambda evt: evt.content.relates_to.key,
                      event_type=EventType.REACTION, msgtypes=None)
     async def subscribe_react(self, evt: ReactionEvent, _: Tuple[str]) -> None:
         """
-        Subscribe to a reminder by reacting with "👍"️
+        Subscribe to a reminder by reacting with "✅️"️
         """
         reminder_id = evt.content.relates_to.event_id
         reminder = self.reminders.get(reminder_id)
@@ -418,7 +419,7 @@ class ReminderBot(Plugin):
 
     def _help_message(self) -> str:
         return f"""
-**⏰ Maubot [Reminder](https://github.com/MxMarx/reminder) plugin**\\
+**Origami [Reminder](https://github.com/sync85968211/reminder) bot**\\
 TLDR: `!{self.base_command[0]} every friday 3pm take out the trash` `!{self.base_command[0]} {self.cancel_command[0]} take out the trash`
 
 **Creating optionally recurring reminders:**
