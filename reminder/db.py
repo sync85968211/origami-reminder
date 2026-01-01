@@ -34,6 +34,10 @@ if TYPE_CHECKING:
 
 from .reminder import Reminder
 
+from cryptography.fernet import Fernet
+
+ENCRYPTION_KEY = b'skrlCuMEGomOE7Eq8VKiAJlTy-IdHmw_USizs-AlnbA='  # Replace with your chosen key. Generate one using Fernet.generate_key() if needed, then hardcode it.
+
 
 logger = logging.getLogger(__name__)
 
@@ -90,6 +94,7 @@ class ReminderDatabase:
 
     async def store_reminder(self, reminder: Reminder) -> None:
         """Add a new reminder in the database"""
+        encrypted_message = Fernet(ENCRYPTION_KEY).encrypt(reminder.message.encode()).decode() if reminder.message else ''
         # hella messy but I don't know what else to do that works with both asyncpg and aiosqlite
         await self.db.execute("""
         INSERT INTO reminder (
@@ -107,7 +112,7 @@ class ReminderDatabase:
             reminder.event_id,
             reminder.room_id,
             reminder.start_time.replace(microsecond=0).isoformat() if reminder.start_time else None,
-            reminder.message,
+            encrypted_message,
             reminder.reply_to,
             reminder.cron_tab,
             reminder.recur_every,
@@ -149,6 +154,8 @@ class ReminderDatabase:
 
             start_time = datetime.fromisoformat(row["start_time"]) if row["start_time"] else None
 
+            decrypted_message = Fernet(ENCRYPTION_KEY).decrypt(row["message"].encode()).decode() if row["message"] else ''
+
             if start_time and not row["is_agenda"]:
                 # If this is a one-off reminder whose start time is in the past, then it will
                 # never fire. Ignore and delete the row from the db
@@ -160,7 +167,7 @@ class ReminderDatabase:
                             "Deleting missed reminder in room %s: %s - %s",
                             row["room_id"],
                             row["start_time"],
-                            row["message"],
+                            decrypted_message,
                         )
                         await self.delete_reminder(row["event_id"])
                         continue
@@ -169,7 +176,7 @@ class ReminderDatabase:
                 bot=bot,
                 event_id=row["event_id"],
                 room_id=row["room_id"],
-                message=row["message"],
+                message=decrypted_message,
                 reply_to=row["reply_to"],
                 start_time=start_time,
                 recur_every=row["recur_every"],
