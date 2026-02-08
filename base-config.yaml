@@ -1,5 +1,5 @@
-# https://github.com/MxMarx/reminder
-# Feature requests welcome!
+# https://github.com/sync85968211/origami-reminder
+# https://origami-convergence.net/
 
 # Default timezone for users who did not set one.
 # This is parsed with dateparser, so Continent/City, UTC offsets, and abbreviations should work.
@@ -28,10 +28,11 @@ agenda_command:
 cancel_command:
 - cancel
 - delete
+- del
 - c
 
-# If verbose is true, display full confirmation messages. If false, confirm by reacting with :thumbs-up:
-verbose: true
+# If verbose is true, display full confirmation messages. If false, confirm by reacting with :white_check_mark:
+verbose_if_more_than_two_in_room: true
 
 # Rate limit for individual users, as the number of reminders allowed to fire in an interval
 rate_limit: 10
@@ -44,6 +45,35 @@ admin_power_level: 50
 #   "%-I:%M%P %Z on %A, %B %-d %Y"  - 7:36pm PDT on Sunday, September 17 2023
 #   "%Y-%m-%d %H:%M %Z"             - 2023-09-17 19:36 PDT
 #   Currently, reminders within 7 days will be displayed as just the relative delta, e.g. "2 days and 1 hour"
-time_format: "%-I:%M%P %Z on %A, %B %-d %Y"
+time_format: "%I:%M %p %Z on %A, %B %d %Y"
+
+max_user_reminders: 50
+
+minimum_reminder_interval_minutes: 5
+
+# Whitelisted homeservers
+trusted_homeservers:
+- matrix.org
+- myhomeserver.com
+
+# Whitelisted users on non-whitelisted homeservers
+trusted_users:
+- '@user1:matrix.org'
+- '@user2:myhomeserver.com'
+
+# Users with a higher reminder limit (specified below)
+upgraded_users:
+- '@upgraded1:matrix.org'
+- '@upgraded2:myhomeserver.com'
+
+max_upgraded_user_reminders: 500
+
+# Who to direct non-whitelisted users to DM if they attempt to set a reminder
+local_admin_mxid: '@admin:example.com'
+
+# Auto-set primary notification room via admin induction + leave
+local_admin_induction_mxid: '@admin:example.com'
+
+reminder_character_limit: 1000
 
 management_room: '!roomid'
