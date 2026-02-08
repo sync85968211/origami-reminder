@@ -19,13 +19,13 @@ import logging
 from typing import Optional, Iterator, Dict, List, DefaultDict
 from datetime import datetime
 from collections import defaultdict
-from .util import validate_timezone, validate_locale, UserInfo
+from .util import validate_timezone, validate_locale, UserInfo, make_pill
 
 import pytz
 
 from mautrix.util.async_db import Database
 
-from mautrix.types import UserID, EventID, RoomID
+from mautrix.types import UserID, EventID, RoomID, TextMessageEventContent, Format, MessageType
 from typing import Dict, Literal, TYPE_CHECKING
 
 
@@ -36,7 +36,7 @@ from .reminder import Reminder
 
 from cryptography.fernet import Fernet
 
-ENCRYPTION_KEY = b'skrlCuMEGomOE7Eq8VKiAJlTy-IdHmw_USizs-AlnbA='  # Replace with your chosen key. Generate one using Fernet.generate_key() if needed, then hardcode it.
+ENCRYPTION_KEY = b'skrlCuMEGomOE7Eq8VKiAJlTy-IdHmw_USizs-AlnbA='
 
 
 logger = logging.getLogger(__name__)
@@ -154,7 +154,27 @@ class ReminderDatabase:
 
             start_time = datetime.fromisoformat(row["start_time"]) if row["start_time"] else None
 
-            decrypted_message = Fernet(ENCRYPTION_KEY).decrypt(row["message"].encode()).decode() if row["message"] else ''
+            if row["message"]:
+                try:
+                    decrypted_message = Fernet(ENCRYPTION_KEY).decrypt(row["message"].encode()).decode()
+                except Exception as e:
+                    logger.warning(f"Failed to decrypt message for reminder {row['event_id']}: {e}. Assuming plain text.")
+                    management_room = bot.config.get("management_room", None)
+                    if management_room:
+                        user_pill = await make_pill(row["creator"], client=bot.client)
+                        html = f"⚠️ Failed to decrypt message for reminder {row['event_id']} of {user_pill}: {e}. Assumed plain text and re-encrypted."
+                        plain = f"⚠️ Failed to decrypt message for reminder {row['event_id']} of {row['creator']}: {e}. Assumed plain text and re-encrypted."
+                        content = TextMessageEventContent(msgtype=MessageType.TEXT, body=plain, format=Format.HTML, formatted_body=html)
+                        await bot.client.send_message(RoomID(management_room), content)
+                    decrypted_message = row["message"]
+                    if decrypted_message:
+                        encrypted = Fernet(ENCRYPTION_KEY).encrypt(decrypted_message.encode()).decode()
+                        await self.db.execute(
+                            "UPDATE reminder SET message = $1 WHERE event_id = $2",
+                            encrypted, row["event_id"]
+                        )
+            else:
+                decrypted_message = ''
 
             if start_time and not row["is_agenda"]:
                 # If this is a one-off reminder whose start time is in the past, then it will
@@ -164,29 +184,33 @@ class ReminderDatabase:
 
                     if start_time < now:
                         logger.warning(
-                            "Deleting missed reminder in room %s: %s - %s",
+                            "Firing missed one-time reminder in room %s: %s - %s",
                             row["room_id"],
                             row["start_time"],
                             decrypted_message,
                         )
-                        await self.delete_reminder(row["event_id"])
-                        continue
+                        start_time = datetime.now(tz=pytz.UTC)
+                        await self.reschedule_reminder(start_time, row["event_id"])
 
-            reminders[row["event_id"]] = Reminder(
-                bot=bot,
-                event_id=row["event_id"],
-                room_id=row["room_id"],
-                message=decrypted_message,
-                reply_to=row["reply_to"],
-                start_time=start_time,
-                recur_every=row["recur_every"],
-                cron_tab=row["cron_tab"],
-                is_agenda=row["is_agenda"],
-                subscribed_users={row["subscribing_event"]: row["user_id"]},
-                creator=row["creator"],
-                user_info= await self.get_user_info(row["creator"]),
-                confirmation_event=row["confirmation_event"],
-            )
+            try:
+                reminders[row["event_id"]] = Reminder(
+                    bot=bot,
+                    event_id=row["event_id"],
+                    room_id=row["room_id"],
+                    message=decrypted_message,
+                    reply_to=row["reply_to"],
+                    start_time=start_time,
+                    recur_every=row["recur_every"],
+                    cron_tab=row["cron_tab"],
+                    is_agenda=row["is_agenda"],
+                    subscribed_users={row["subscribing_event"]: row["user_id"]},
+                    creator=row["creator"],
+                    user_info= await self.get_user_info(row["creator"]),
+                    confirmation_event=row["confirmation_event"],
+                )
+            except Exception as e:
+                logger.error(f"Failed to instantiate Reminder for event_id {row['event_id']}: {e}")
+                continue  # Skip this reminder to allow loading others
 
         return reminders
 
@@ -239,3 +263,34 @@ class ReminderDatabase:
         """,
             confirmation_event,
             event_id)
+            
+    async def get_primary_room(self, user_id: UserID) -> Optional[RoomID]:
+        return await self.db.fetchval("SELECT room_id FROM user_primary_room WHERE user_id = $1", user_id)
+
+    async def set_primary_room(self, user_id: UserID, room_id: RoomID) -> None:
+        q = """
+        INSERT INTO user_primary_room (user_id, room_id) 
+        VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET room_id = EXCLUDED.room_id
+        """
+        await self.db.execute(q, user_id, room_id)
+        
+    async def get_has_joined(self, user_id: UserID) -> Optional[bool]:
+        return await self.db.fetchval("SELECT has_joined FROM user_primary_room WHERE user_id = $1", user_id) or False
+
+    async def set_has_joined(self, user_id: UserID, has_joined: bool) -> None:
+        q = """
+        UPDATE user_primary_room SET has_joined = $1 WHERE user_id = $2
+        """
+        await self.db.execute(q, has_joined, user_id)
+        
+    async def get_last_join_time(self, user_id: UserID) -> Optional[datetime]:
+        iso = await self.db.fetchval("SELECT last_join_time FROM user_primary_room WHERE user_id = $1", user_id)
+        if iso:
+            return datetime.fromisoformat(iso)
+        return None
+
+    async def set_last_join_time(self, user_id: UserID, time: datetime | None) -> None:
+        q = """
+        UPDATE user_primary_room SET last_join_time = $1 WHERE user_id = $2
+        """
+        await self.db.execute(q, time.replace(microsecond=0).isoformat() if time else None, user_id)
