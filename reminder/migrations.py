@@ -60,6 +60,30 @@ async def upgrade_v1(conn: Connection, scheme: Scheme) -> None:
         )"""
     )
     
+@upgrade_table.register(description="Add user primary notification room table")
+async def upgrade_v3(conn: Connection, scheme: Scheme) -> None:
+    await conn.execute(
+        f"""CREATE TABLE IF NOT EXISTS user_primary_room (
+            user_id     VARCHAR(255) NOT NULL,  /* user_id */
+            room_id     VARCHAR(255) NOT NULL,  /* primary notification room_id */
+            PRIMARY KEY (user_id)
+        )"""
+    )
+
+@upgrade_table.register(description="Add has_joined column")
+async def upgrade_v4(conn: Connection, scheme: Scheme) -> None:
+    await conn.execute(
+        f"""ALTER TABLE user_primary_room ADD COLUMN has_joined BOOL DEFAULT FALSE
+        """
+    )
+    
+@upgrade_table.register(description="Add last_join_time column")
+async def upgrade_v5(conn: Connection, scheme: Scheme) -> None:
+    await conn.execute(
+        f"""ALTER TABLE user_primary_room ADD COLUMN last_join_time TEXT
+        """
+    )
+    
 @upgrade_table.register(description="Encrypt existing reminder messages")
 async def upgrade_v2(conn: Connection, scheme: Scheme) -> None:
     rows = await conn.fetch("SELECT event_id, message FROM reminder WHERE message IS NOT NULL AND message != ''")
