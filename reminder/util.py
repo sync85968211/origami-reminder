@@ -26,7 +26,9 @@ from dateparser.search import search_dates
 import dateparser
 import logging
 import pytz
+import re
 from enum import Enum
+from dataclasses import dataclass, field
 
 from maubot.client import MaubotMatrixClient
 from mautrix.types import UserID, RoomID, EventID
@@ -37,6 +39,40 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+def normalize_time_str(time_str: str) -> str:
+    """Normalize time interval strings by expanding abbreviations and handling pluralization."""
+    # First, handle 'w' to 'wk' (with optional space)
+    time_str = re.sub(r'(\b\d+)\s?w\b', r'\1 wk', time_str, flags=re.I)
+    
+    # Define a helper for pluralization
+    def plural_unit(num: int, singular: str, plural: str = None) -> str:
+        if plural is None:
+            plural = singular + 's'
+        return f"{num} {singular if num == 1 else plural}"
+    
+    # Seconds
+    time_str = re.sub(r'(\d+)\s*(s|sec|secs?|seconds?)\b', lambda m: plural_unit(int(m.group(1)), 'second'), time_str, flags=re.I)
+    # Minutes
+    time_str = re.sub(r'(\d+)\s*(m|min|mins?|minutes?)\b', lambda m: plural_unit(int(m.group(1)), 'minute'), time_str, flags=re.I)
+    # Hours
+    time_str = re.sub(r'(\d+)\s*(h|hr|hrs?|hours?)\b', lambda m: plural_unit(int(m.group(1)), 'hour'), time_str, flags=re.I)
+    # Days
+    time_str = re.sub(r'(\d+)\s*(d|days?)\b', lambda m: plural_unit(int(m.group(1)), 'day'), time_str, flags=re.I)
+    # Weeks
+    time_str = re.sub(r'(\d+)\s*(wk|wks?|weeks?)\b', lambda m: plural_unit(int(m.group(1)), 'week'), time_str, flags=re.I)
+    # Months
+    time_str = re.sub(r'(\d+)\s*(mo|mon|mons?|months?)\b', lambda m: plural_unit(int(m.group(1)), 'month'), time_str, flags=re.I)
+    # Years
+    time_str = re.sub(r'(\d+)\s*(y|yr|yrs?|years?)\b', lambda m: plural_unit(int(m.group(1)), 'year'), time_str, flags=re.I)
+    
+    return time_str.strip()
+
+def check_long_numbers(s: str, max_digits: int = 10) -> bool:
+    numbers = re.findall(r'\d+', s)
+    for num in numbers:
+        if len(num) > max_digits:
+            return True
+    return False
 
 class CommandSyntax(Enum):
     REMINDER_CREATE = """
@@ -45,15 +81,18 @@ class CommandSyntax(Enum):
 * `!{base_command} 2023-11-30 15:00 befriend rats`
 * `!{base_command} abolish closed-access journals at 3pm tomorrow`
 * `July 2`, `tuesday at 2pm`, `8pm`, `20 days`, `4d`, `2wk`, ...
-* Dates doesn't need to be at the beginning of the string, but parsing works better if they are.
+* Dates don't need to be at the beginning of the string, but parsing works better if they are.
 
 `!{base_command} [room] [every] ...`
 * `[room]` pings the whole room
-* `[every]` create recurring reminders `!{base_command} every friday 3pm take out the trash`
-
-`!{base_command} [room] <cron> <message>` Schedules a reminder using a crontab syntax
-* `!{base_command} cron 30 9 * * mon-fri do something` sets reminders for 9:30am, Monday through Friday.
-* `!{base_command} cron` lists more examples
+* `[every]` create recurring reminders:
+  * `!{base_command} every 1h; take out the trash` (fires in 1 hour, then every hour thereafter)
+  * `!{base_command} every 1 minute at 11:00; check the oven` (fires every minute starting at 11:00)
+  * `!{base_command} every wednesday at 11:00; team meeting` (fires every Wednesday at 11:00)
+  * `!{base_command} every 5h on wednesday at 6:00; test` (fires every 5 hours starting on Wednesday at 6:00)
+  * `!{base_command} every 5h on 2026-11-15 at 5:00; test` (fires every 5 hours starting on 2026-11-15 at 5:00)
+  * `!{base_command} every 5h on january 15 at 5:00; test` (fires every 5 hours starting on January 15 at 5:00)
+* Supported units: seconds (s/sec), minutes (m/min), hours (h/hr), days (d/day), weeks (w/wk), months (mo/mon/month), years (y/yr). Plural forms and abbreviations are fine.
 
 You can also reply to any message with `!{base_command} ...` to get reminded about that message.\\
 To get pinged by someone else's reminder, react to their message with ✅️.
@@ -64,14 +103,13 @@ To get pinged by someone else's reminder, react to their message with ✅️.
     """
 
     REMINDER_LIST = """
-`!{base_command} list [all] [my] [subscribed]` lists all reminders in a room 
-* `all` lists all reminders from every room
+`!{base_command} list [my] [subscribed]` lists all reminders in a room 
 * `my` lists only reminders you created
 * `subscribed` lists only reminders you are subscribed to
     """
 
     REMINDER_CANCEL = """
-Cancel reminders by removing the message creating it, unsubscribe by removing your upvote.\\
+Cancel reminders by removing the message creating it, unsubscribe by removing your checkmark.\\
 Cancel recurring reminders by replying with `!{base_command} {cancel_aliases}` 
 * `!{base_command} {cancel_aliases} <ID>` deletes a reminder matching the 4 letter ID shown by `list`
 * `!{base_command} {cancel_aliases} <message>` deletes a reminder **beginning with** <message>
@@ -89,38 +127,14 @@ Defaults are `{default_tz}` and `{default_locale}`
 * `!{base_command} locale [new-locale]` view or set your locale
 """
 
-    PARSE_DATE_EXAMPLES = "Examples: `Tuesday at noon`, `2023-11-30 10:15 pm`, `July 2`, `6 hours`, `8pm`, `4d`, `2wk`"
-
-    CRON_EXAMPLE = """
-```
-*	any value
-,	value list separator
--	range of values
-/	step 
-
-┌─────── minute (0 - 59)
-│ ┌─────── hour (0 - 23)
-│ │ ┌─────── day of the month (1 - 31)
-│ │ │ ┌─────── month (1 - 12)
-│ │ │ │ ┌─────── weekday (0 - 6) (Sunday to Saturday)                             
-│ │ │ │ │
-* * * * * <message>
-```
-
-```
-30 9 * * *              Every day at 9:30am
-0/30 9-17 * * mon-fri   Every 30 minutes from 9am to 5pm, Monday through Friday
-0 14 1,16 * *           2:00pm on the 1st and 16th day of the month
-0 0 1-7 * mon           First Monday of the month at midnight
-```
- """
+    PARSE_DATE_EXAMPLES = "Examples: `Tuesday at noon`, `2032-11-30 10:15 pm`, `July 2`, `6 hours`, `8pm`, `4d`, `2wk`"
 
 
 @dataclass
 class UserInfo:
     locale: str = None
     timezone: str = None
-    last_reminders: deque = deque()
+    last_reminders: deque = field(default_factory=deque)
 
     def check_rate_limit(self, max_calls=5, time_window=60) -> int:
         """ Implement a sliding window rate limit on the number of reminders per user
@@ -134,8 +148,7 @@ class UserInfo:
         # remove timestamps outside the sliding window
         while len(self.last_reminders) and self.last_reminders[0] + timedelta(minutes=time_window) < now:
             self.last_reminders.popleft()
-        if len(self.last_reminders) < max_calls:
-            self.last_reminders.append(now)
+        self.last_reminders.append(now)
         return len(self.last_reminders)
 
 class CommandSyntaxError(ValueError):
@@ -159,7 +172,10 @@ def validate_locale(locale: str):
     except ValueError:
         return False
 
-def parse_date(str_with_time: str, user_info: UserInfo, search_text: bool=False) -> Tuple[datetime, str]:
+def is_relative_date(s: str) -> bool:
+    return bool(re.match(r'^\d+\s+\w+(s)?$', s.strip()))
+
+def parse_date(str_with_time: str, user_info: UserInfo, search_text: bool=False, relative_base: Optional[datetime] = None, allow_past: bool = False) -> Tuple[datetime, str]:
     """
     Extract the date from a string.
 
@@ -179,14 +195,17 @@ def parse_date(str_with_time: str, user_info: UserInfo, search_text: bool=False)
     # Until dateparser makes it so locales can be used in the searcher, use this to get date order
     date_order = validate_locale(user_info.locale).info["date_order"]
 
-    # Replace "3w" with "3wk" to satisfy dateparser
-    str_with_time = re.sub(r"(\b\d+)\s?w\b", r"\1wk", str_with_time, count=1)
+    str_with_time = normalize_time_str(str_with_time)
+    if check_long_numbers(str_with_time):
+        raise CommandSyntaxError("Number in date string exceeds 10 digits.")
 
     settings = {'TIMEZONE': user_info.timezone,
                 'TO_TIMEZONE': 'UTC',
                 'DATE_ORDER': date_order,
                 'PREFER_DATES_FROM': 'future',
                 'RETURN_AS_TIMEZONE_AWARE': True}
+    if relative_base:
+        settings['RELATIVE_BASE'] = relative_base
 
     # dateparser.parse is more reliable than search_dates. If the date is at the beginning of the message,
     # try dateparser.parse on the first 8 words and use the date from the longest sequence that successfully parses.
@@ -208,21 +227,33 @@ def parse_date(str_with_time: str, user_info: UserInfo, search_text: bool=False)
     if not date:
         raise CommandSyntaxError("Unable to extract date from string", CommandSyntax.PARSE_DATE_EXAMPLES)
 
+    # Preserve original for substitution
+    original_date_str = date_str
+
+    # Remove leading "in " if present (common in relative parsed strings)
+    stripped_in = False
+    if isinstance(date_str, str) and date_str.lower().startswith("in "):
+        date_str = date_str[3:].strip()
+        stripped_in = True
+
+    # For substitution, include "in " if it was stripped
+    date_str_for_sub = "in " + date_str if stripped_in else original_date_str
+
     # Round datetime object to the nearest second for nicer display
     date = date.replace(microsecond=0)
 
     # Disallow times in the past
-    if date < datetime.now(tz=pytz.UTC):
+    if date < datetime.now(tz=pytz.UTC) and not allow_past:
         raise CommandSyntaxError(f"Sorry, `{format_time(date, user_info)}` is in the past and I don't have a time machine (yet...)")
 
-    return date, date_str
+    return date, date_str_for_sub
 
 def pluralize(val: int, unit: str) -> str:
     if val == 1:
         return f"{val} {unit}"
     return f"{val} {unit}s"
 
-def format_time(time: datetime, user_info: UserInfo, time_format: str = "%-I:%M%P %Z on %A, %B %-d %Y") -> str:
+def format_time(time: datetime, user_info: UserInfo, time_format: str = "%I:%M:%S%p %Z on %A, %B %d %Y") -> str:
     """
     Format time as something readable by humans.
     Args:
@@ -256,7 +287,8 @@ def format_time(time: datetime, user_info: UserInfo, time_format: str = "%-I:%M%
                 formatted_time = formatted_time + " ago"
     else:
         formatted_time = time.astimezone(
-            dateparser.utils.get_timezone_from_tz_string(user_info.timezone)).strftime(time_format)
+        dateparser.utils.get_timezone_from_tz_string(user_info.timezone)).strftime(time_format)
+        formatted_time = re.sub(r'(^|\s)0(\d)', r'\1\2', formatted_time)
     return formatted_time
 
 
