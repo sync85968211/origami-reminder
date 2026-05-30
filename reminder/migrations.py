@@ -1,5 +1,6 @@
 # reminder - A maubot plugin to remind you about things.
 # Copyright (C) 2020 Tulir Asokan
+# Copyright (C) 2026 sync85968211
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU Affero General Public License as published by
@@ -13,6 +14,11 @@
 #
 # You should have received a copy of the GNU Affero General Public License
 # along with this program.  If not, see <https://www.gnu.org/licenses/>.
+from cryptography.fernet import Fernet
+import os
+
+ENCRYPTION_KEY = os.environ["REMINDERS_ENCRYPTION_KEY"].encode()
+
 from mautrix.util.async_db import Connection, Scheme, UpgradeTable
 
 upgrade_table = UpgradeTable()
@@ -41,7 +47,7 @@ async def upgrade_v1(conn: Connection, scheme: Scheme) -> None:
         f"""CREATE TABLE IF NOT EXISTS reminder_target (
             event_id            VARCHAR(255) NOT NULL,  /* event_id in the reminder table */
             user_id             VARCHAR(255) NOT NULL,  /* user_id of the subscriber */
-            subscribing_event   VARCHAR(255) NOT NULL,  /* event_id of the event creating the subscription, either a 👍 or the reminder message itself */
+            subscribing_event   VARCHAR(255) NOT NULL,  /* event_id of the event creating the subscription, either a ✅️ or the reminder message itself */
             PRIMARY KEY (user_id, event_id),
             FOREIGN KEY (event_id) REFERENCES reminder (event_id) ON DELETE CASCADE
         )"""
@@ -55,3 +61,39 @@ async def upgrade_v1(conn: Connection, scheme: Scheme) -> None:
             PRIMARY KEY (user_id)
         )"""
     )
+    
+@upgrade_table.register(description="Add user primary notification room table")
+async def upgrade_v3(conn: Connection, scheme: Scheme) -> None:
+    await conn.execute(
+        f"""CREATE TABLE IF NOT EXISTS user_primary_room (
+            user_id     VARCHAR(255) NOT NULL,  /* user_id */
+            room_id     VARCHAR(255) NOT NULL,  /* primary notification room_id */
+            PRIMARY KEY (user_id)
+        )"""
+    )
+
+@upgrade_table.register(description="Add has_joined column")
+async def upgrade_v4(conn: Connection, scheme: Scheme) -> None:
+    await conn.execute(
+        f"""ALTER TABLE user_primary_room ADD COLUMN has_joined BOOL DEFAULT FALSE
+        """
+    )
+    
+@upgrade_table.register(description="Add last_join_time column")
+async def upgrade_v5(conn: Connection, scheme: Scheme) -> None:
+    await conn.execute(
+        f"""ALTER TABLE user_primary_room ADD COLUMN last_join_time TEXT
+        """
+    )
+    
+@upgrade_table.register(description="Encrypt existing reminder messages")
+async def upgrade_v2(conn: Connection, scheme: Scheme) -> None:
+    rows = await conn.fetch("SELECT event_id, message FROM reminder WHERE message IS NOT NULL AND message != ''")
+    fernet = Fernet(ENCRYPTION_KEY)
+    for row in rows:
+        try:
+            # Attempt decryption first to check if already encrypted; if it succeeds, skip.
+            fernet.decrypt(row['message'].encode())
+        except:
+            encrypted = fernet.encrypt(row['message'].encode()).decode()
+            await conn.execute("UPDATE reminder SET message = $1 WHERE event_id = $2", encrypted, row['event_id'])
