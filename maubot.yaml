@@ -1,5 +1,5 @@
 maubot: 0.4.1
-id: org.bytemarx.reminder
+id: net.origami.reminder
 version: 0.1.2
 license: AGPL-3.0-or-later
 modules:
@@ -11,8 +11,8 @@ dependencies:
 - pytz
 - dateparser
 - apscheduler
+- cryptography
 soft_dependencies:
 - cron_descriptor
 database: true
 database_type: asyncpg
-
